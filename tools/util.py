@@ -132,7 +132,7 @@ def execute_idf_commands(root, cmd, directory) -> bool:
     return True
 
 
-def set_target(root, chip, suffix=""):
+def set_target(root, chip, suffix="", flash_size=None):
     '''
     1. Copy sdkconfig.defaults before generate sdkconfig.h
     use: idf.py set-target xxx
@@ -143,6 +143,14 @@ def set_target(root, chip, suffix=""):
     sdk_config_default = os.path.join(tuya_path, "sdkconfig.defaults")
     if not copy_file(sdk_config, sdk_config_default):
         return False
+    # Flash size is chip-agnostic and just two sdkconfig keys, so inject it here
+    # (appended -> last-wins over the base defaults) instead of baking a separate
+    # sdkconfig per chip x interface x size.
+    if flash_size:
+        with open(sdk_config_default, "a", encoding="utf-8") as f:
+            f.write("\n# --- flash size (auto, from CONFIG_PLATFORM_FLASHSIZE_*) ---\n")
+            f.write(f"CONFIG_ESPTOOLPY_FLASHSIZE_{flash_size}MB=y\n")
+            f.write(f'CONFIG_ESPTOOLPY_FLASHSIZE="{flash_size}MB"\n')
     cmd = f"idf.py set-target {chip}"
     directory = os.path.join(root, "tuya_open_sdk")
     if not execute_idf_commands(root, cmd, directory):
