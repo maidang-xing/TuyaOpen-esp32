@@ -5,6 +5,7 @@
 # $2 - user cmd: build/clean/...
 
 import os
+import re
 import sys
 import json
 
@@ -46,17 +47,48 @@ def set_environment(build_param_path, param_data):
     pass
 
 
-def set_partitions(root, param_data):
-    if param_data.get("CONFIG_PLATFORM_FLASHSIZE_16M", False):
-        flash = "16M"
-    elif param_data.get("CONFIG_PLATFORM_FLASHSIZE_8M", False):
-        flash = "8M"
-    else:
-        flash = "4M"
+def flash_size_mb(param_data):
+    """Explicit flash size in MB from CONFIG_PLATFORM_FLASHSIZE_<N>M, or None if the
+    board selects none (fall back to the chip's base sdkconfig default)."""
+    for n in (32, 16, 8, 4):
+        if param_data.get(f"CONFIG_PLATFORM_FLASHSIZE_{n}M", False):
+            return n
+    return None
 
-    print(f"Set flash size {flash}")
+
+def base_flash_size_mb(root, chip, suffix):
+    """Effective flash size (MB) esp-idf will use when the board selects none. Prefer the
+    generated sdkconfig (captures base + target-specific sdkconfig.defaults.<target>, e.g.
+    esp32p4 bumps to 32MB); fall back to the source base sdkconfig, then 4."""
+    gen = os.path.join(root, "tuya_open_sdk", "build", "config", "sdkconfig.h")
+    try:
+        with open(gen, "r", encoding="utf-8") as f:
+            m = re.search(r'CONFIG_ESPTOOLPY_FLASHSIZE\s+"(\d+)MB"', f.read())
+            if m:
+                return int(m.group(1))
+    except OSError:
+        pass
+    path = os.path.join(root, "tuya_open_sdk", f"sdkconfig_{chip}{suffix}")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            m = re.search(r'CONFIG_ESPTOOLPY_FLASHSIZE="(\d+)MB"', f.read())
+            if m:
+                return int(m.group(1))
+    except OSError:
+        pass
+    return 4
+
+
+def set_partitions(root, param_data):
+    n = flash_size_mb(param_data)
+    if n is None:
+        # No explicit select: match the chip's base sdkconfig flash size.
+        n = base_flash_size_mb(root, param_data["PLATFORM_CHIP"], _suffix(param_data))
+        print(f"Flash size not set, using chip default {n}M")
+    else:
+        print(f"Set flash size {n}M")
     tuya_path = os.path.join(root, "tuya_open_sdk")
-    source = os.path.join(tuya_path, f"partitions_{flash}.csv")
+    source = os.path.join(tuya_path, f"partitions_{n}M.csv")
     target = os.path.join(tuya_path, "partitions.csv")
     copy_file(source, target)
     pass
@@ -167,7 +199,7 @@ def main():
     if need_settarget(app_file, app_name) or need_settarget(target_file, chip):
         clean(root)
         suffix = _suffix(param_data)
-        if not set_target(root, chip, suffix):
+        if not set_target(root, chip, suffix, flash_size_mb(param_data)):
             print("Error: set-target failed.")
             sys.exit(1)
     record_target(app_file, app_name)
